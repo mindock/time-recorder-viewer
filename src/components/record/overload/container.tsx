@@ -191,17 +191,64 @@ class RecordOverloadContainer extends React.Component<
     }, luxon.Duration.fromMillis(0));
   }
 
+  private getTotalFuseOverTimePerWeek() {
+    if (this.overloadStore === null) {
+      return [];
+    }
+
+    const fuseRecords = this.overloadStore.Records.sort((a, b) =>
+      a.week < b.week ? -1 : 1
+    ).map(record => {
+      const week = record.week;
+      const startDate = luxon.DateTime.fromISO(`${week}-1`).minus({
+        days: 1
+      });
+      const endDate = luxon.DateTime.fromISO(`${week}-6`);
+      return {
+        week,
+        startDate,
+        endDate,
+        use: luxon.Duration.fromMillis(0)
+      };
+    });
+
+    let index = 0;
+    this.overloadStore.FuseRecords.sort((a, b) =>
+      a.date < b.date ? -1 : 1
+    ).forEach(fuseRecord => {
+      const fuseDate = luxon.DateTime.fromFormat(fuseRecord.date, 'yyyyLLdd');
+      for (let i = index; i < fuseRecords.length; i++) {
+        index = i;
+        if (
+          fuseRecords[i].startDate <= fuseDate &&
+          fuseRecords[i].endDate >= fuseDate
+        ) {
+          const used = luxon.Duration.fromISO(fuseRecord.use);
+          fuseRecords[i].use = fuseRecords[i].use.plus(used);
+          break;
+        }
+      }
+    });
+
+    return fuseRecords;
+  }
+
   public getOverTimeRows() {
     if (this.overloadStore === null) {
       return null;
     }
 
-    let totalFuseOverTime = this.getTotalFuseOverTime();
-    const zeroDuration = luxon.Duration.fromMillis(0);
+    let totalRemainTime = luxon.Duration.fromMillis(0);
+    const fuseRecords = this.getTotalFuseOverTimePerWeek();
 
     return this.overloadStore.Records.sort((a, b) => (a.week < b.week ? -1 : 1))
-      .map(mv => {
-        const updateMv = { ...mv, remainTime: luxon.Duration.fromMillis(0) };
+      .map((mv, index) => {
+        const updateMv = {
+          ...mv,
+          remainTime: luxon.Duration.fromMillis(0),
+          usedTime: fuseRecords[index].use
+        };
+
         if (!!mv.over) {
           let overTimeDuration = luxon.Duration.fromObject(mv.over);
           const isMinus = overTimeDuration.as('milliseconds') < 0;
@@ -210,13 +257,12 @@ class RecordOverloadContainer extends React.Component<
               -overTimeDuration.as('milliseconds')
             );
           }
-          // 남은 초과근무 소진 시간이 없는가?
-          if (totalFuseOverTime <= zeroDuration) {
-            updateMv.remainTime = overTimeDuration;
-          } else if (totalFuseOverTime < overTimeDuration) {
-            updateMv.remainTime = overTimeDuration.minus(totalFuseOverTime);
-          }
-          totalFuseOverTime = totalFuseOverTime.minus(overTimeDuration);
+
+          totalRemainTime = totalRemainTime
+            .plus(overTimeDuration)
+            .minus(updateMv.usedTime);
+
+          updateMv.remainTime = totalRemainTime;
         }
         return updateMv;
       })
@@ -234,7 +280,6 @@ class RecordOverloadContainer extends React.Component<
         // 그리고 toFormat('hh:mm:ss')로 표시
         // 위와 같은 작업을 remain에도 진행한다.
         let overTimeStr = '-';
-        const haveOverTime = !!mv.over;
         let isMinus = false;
         if (!!mv.over) {
           let overTimeDuration = luxon.Duration.fromObject(mv.over);
@@ -248,6 +293,16 @@ class RecordOverloadContainer extends React.Component<
             'hh:mm:ss'
           )}`;
         }
+
+        const isRemainMinus = mv.remainTime.as('milliseconds') < 0;
+        const reaminDuration = isRemainMinus
+          ? luxon.Duration.fromMillis(-mv.remainTime.as('milliseconds'))
+          : mv.remainTime;
+
+        const remainTimeStr = `${
+          isRemainMinus ? '-' : ''
+        }${reaminDuration.toFormat('hh:mm:ss')}`;
+
         return (
           <tr
             key={mv.week}
@@ -261,9 +316,8 @@ class RecordOverloadContainer extends React.Component<
               <div>{period}</div>
             </td>
             <td>{overTimeStr}</td>
-            <td>{`${haveOverTime && isMinus ? '-' : ''}${mv.remainTime.toFormat(
-              'hh:mm:ss'
-            )}`}</td>
+            <td>{mv.usedTime.toFormat('hh:mm:ss')}</td>
+            <td>{remainTimeStr}</td>
           </tr>
         );
       });
@@ -391,6 +445,7 @@ class RecordOverloadContainer extends React.Component<
                       <th>기록</th>
                       <th className="d-none d-sm-table-cell">기록기간</th>
                       <th>초과시간</th>
+                      <th>사용시간</th>
                       <th>남은시간</th>
                     </tr>
                   </thead>
